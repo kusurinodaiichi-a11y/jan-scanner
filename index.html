@@ -83,6 +83,20 @@
     
     #reader {
       width: 100%;
+      position: relative;
+    }
+    #reader video, #reader canvas {
+      width: 100%;
+      height: auto;
+      display: block;
+    }
+    #reader canvas.drawingBuffer {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
     }
     
     /* レーザー風のスキャンアニメーション */
@@ -283,7 +297,8 @@
       font-weight: 500;
     }
   </style>
-  <script src="https://unpkg.com/html5-qrcode"></script>
+  <!-- 1Dバーコード（EAN/JAN）の読み取りにおいてiOS Safariで抜群の実績を持つQuaggaJSをロード -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/quagga/0.12.1/quagga.min.js"></script>
 </head>
 <body>
   <div class="container">
@@ -331,18 +346,7 @@
   </div>
 
   <script>
-    // iOS 17以降のSafariでBarcodeDetectorのバグによりJANコードが読めなくなる問題を完全に防ぐため、
-    // ライブラリの初期化前に BarcodeDetector API を隠蔽してZXing（JS版）に強制フォールバックさせます。
-    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
-      try {
-        delete window.BarcodeDetector;
-      } catch (e) {
-        window.BarcodeDetector = undefined;
-      }
-    }
-
     let scannedJans = [];
-    let html5Qrcode = null;
     let lastScannedJan = "";
     let lastScanTime = 0;
     const DEBOUNCE_TIME = 2000; // 同一JANコードの連続読み取りを防ぐロック時間 (2秒)
@@ -350,6 +354,7 @@
     let activeTrack = null; // ズーム制御用
     let cameraDevices = []; // 利用可能なカメラ一覧
     let currentCameraIndex = 0; // 現在のカメラインデックス
+    let isQuaggaRunning = false;
 
     const playBeep = (type = 'success') => {
       try {
@@ -375,10 +380,6 @@
       } catch (e) {
         console.error(e);
       }
-    };
-
-    fontColor = (color) => {
-      document.getElementById('status').style.color = color;
     };
 
     function addJan(jan) {
@@ -461,10 +462,10 @@
     }
 
     // 🔍 ズーム制御関連JS
-    function setupZoomSupport(scannerInstance) {
+    function setupZoomSupport() {
       try {
-        if (typeof scannerInstance.getActiveTrack !== 'function') return;
-        activeTrack = scannerInstance.getActiveTrack();
+        if (typeof Quagga.CameraAccess.getActiveTrack !== 'function') return;
+        activeTrack = Quagga.CameraAccess.getActiveTrack();
         if (!activeTrack) return;
         
         const capabilities = activeTrack.getCapabilities();
@@ -530,67 +531,71 @@
       currentCameraIndex = (currentCameraIndex + 1) % cameraDevices.length;
       document.getElementById('status').innerText = "カメラを切り替えています...";
       
-      if (html5Qrcode) {
-        html5Qrcode.stop().then(() => {
-          const nextId = cameraDevices[currentCameraIndex].id;
-          const config = {
-            fps: 15,
-            formatsToSupport: [
-              Html5QrcodeSupportedFormats.EAN_13,
-              Html5QrcodeSupportedFormats.EAN_8
-            ],
-            videoConstraints: {
-              width: { ideal: 1280 },
-              height: { ideal: 720 },
-              facingMode: "environment"
-            },
-            experimentalFeatures: {
-              useBarCodeDetectorIfSupported: false
-            }
-          };
-          
-          html5Qrcode.start(
-            nextId,
-            config,
-            (decodedText) => addJan(decodedText),
-            (error) => {}
-          ).then(() => {
-            document.getElementById('status').innerText = "カメラを切り替えました。枠に合わせてください。";
-            setupZoomSupport(html5Qrcode);
-          }).catch(err => {
-            document.getElementById('status').innerText = "カメラ起動エラー: " + err;
-          });
-        }).catch(err => {
-          console.error("カメラ停止エラー: ", err);
-        });
+      if (isQuaggaRunning) {
+        Quagga.stop();
+        isQuaggaRunning = false;
       }
+      
+      const nextId = cameraDevices[currentCameraIndex].deviceId || cameraDevices[currentCameraIndex].id;
+      initQuagga(nextId);
+    }
+
+    function initQuagga(deviceId) {
+      document.getElementById('status').innerText = "カメラを起動しています...";
+      
+      const constraints = {
+        width: { ideal: 1280 },
+        height: { ideal: 720 },
+        facingMode: "environment"
+      };
+      
+      if (deviceId) {
+        delete constraints.facingMode;
+        constraints.deviceId = deviceId;
+      }
+      
+      Quagga.init({
+        inputStream: {
+          name: "Live",
+          type: "LiveStream",
+          target: document.querySelector('#reader'),
+          constraints: constraints,
+          area: { // スキャン検出の感度を中央部に絞り込んでノイズ・誤読を低減
+            top: "10%",
+            right: "10%",
+            left: "10%",
+            bottom: "10%"
+          }
+        },
+        decoder: {
+          readers: ["ean_reader", "ean_8_reader"] // JANコード専用
+        },
+        locate: true, // バーコードの領域検知（これでiOSの歪みバグを無効化）
+        numOfWorkers: 2
+      }, function(err) {
+        if (err) {
+          document.getElementById('status').innerText = "カメラ起動エラー: " + err;
+          isQuaggaRunning = false;
+          return;
+        }
+        
+        Quagga.start();
+        isQuaggaRunning = true;
+        document.getElementById('status').innerText = "バーコードを中央付近に合わせてください。";
+        
+        // カメラ初期化後に少し時間をおいてからトラックのズームを設定
+        setTimeout(setupZoomSupport, 1000);
+      });
     }
 
     function startScan() {
-      html5Qrcode = new Html5Qrcode("reader");
-      
-      const config = {
-        fps: 15,
-        formatsToSupport: [
-          Html5QrcodeSupportedFormats.EAN_13,
-          Html5QrcodeSupportedFormats.EAN_8
-        ],
-        videoConstraints: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          facingMode: "environment"
-        },
-        experimentalFeatures: {
-          useBarCodeDetectorIfSupported: false
-        }
-      };
-
-      // 1. デバイス一覧を取得して、初期起動カメラを決定する
-      Html5Qrcode.getCameras().then(devices => {
+      // 1. 利用可能なカメラデバイス一覧を取得
+      Quagga.CameraAccess.enumerateVideoDevices().then(devices => {
         cameraDevices = devices || [];
         
         if (cameraDevices.length === 0) {
-          document.getElementById('status').innerText = "カメラが見つかりませんでした。";
+          // デバイスが列挙できなくても、フォールバックとして環境起動を試みる
+          initQuagga(null);
           return;
         }
 
@@ -599,52 +604,69 @@
           document.getElementById('btn-switch-camera').style.display = 'block';
         }
 
-        // iPhoneのSafari初期インカメラ起動を防ぐため、デフォルトは「配列の最後（通常は背面）」を選択
-        // iOS Safariではラベルが空文字になるため、明示的に最後のカメラIDを指定
-        currentCameraIndex = cameraDevices.length - 1;
-        let cameraId = cameraDevices[currentCameraIndex].id;
-
-        // もしラベルが取得できていて、背面の文字があればそれを優先して初期値にする
-        for (let i = 0; i < cameraDevices.length; i++) {
-          const label = (cameraDevices[i].label || "").toLowerCase();
-          if (label.indexOf("back") !== -1 || label.indexOf("rear") !== -1 || label.indexOf("背面") !== -1) {
-            currentCameraIndex = i;
-            cameraId = cameraDevices[i].id;
-            break;
-          }
-        }
-
-        html5Qrcode.start(
-          cameraId,
-          config,
-          (decodedText) => {
-            addJan(decodedText);
-          },
-          (error) => {
-            // エラー無視
-          }
-        ).then(() => {
-          document.getElementById('status').innerText = "バーコードを枠に合わせてください。";
-          setupZoomSupport(html5Qrcode);
-        }).catch(err => {
-          console.warn("指定IDでの起動失敗。標準環境起動を試みます...", err);
-          // 万が一失敗した場合は、標準の facingMode 起動でフォールバック
-          html5Qrcode.start(
-            { facingMode: "environment" },
-            config,
-            (decodedText) => addJan(decodedText),
-            (error) => {}
-          ).then(() => {
-            document.getElementById('status').innerText = "バーコードを枠に合わせてください。";
-            setupZoomSupport(html5Qrcode);
-          }).catch(err2 => {
-            document.getElementById('status').innerText = "カメラ起動エラー: " + err2;
-          });
-        });
+        // 初期起動時は環境（背面）を優先するため deviceId = null で起動
+        initQuagga(null);
       }).catch(err => {
-        document.getElementById('status').innerText = "カメラ取得エラー: " + err;
+        console.warn("カメラ一覧の取得に失敗。標準背面カメラでの起動を試みます...", err);
+        initQuagga(null);
       });
     }
+
+    // バーコードを検出した際のコールバック
+    Quagga.onDetected(function(result) {
+      if (result && result.codeResult && result.codeResult.code) {
+        const code = result.codeResult.code;
+        // Quaggaの唯一の弱点である「かすれやノイズによる誤読」を防ぐため、
+        // EAN-13 / EAN-8 のチェックサムを計算して正しいJANコードのみを受理する
+        if (isValidEAN(code)) {
+          addJan(code);
+        }
+      }
+    });
+
+    // EANチェックサム（モジュール10ウェイト3・1）検証
+    function isValidEAN(code) {
+      if (!/^\d{8}$|^\d{13}$/.test(code)) return false;
+      const digits = code.split('').map(Number);
+      const checkDigit = digits.pop();
+      let sum = 0;
+      if (digits.length === 12) { // EAN-13
+        for (let i = 0; i < 12; i++) {
+          sum += digits[i] * (i % 2 === 0 ? 1 : 3);
+        }
+      } else if (digits.length === 7) { // EAN-8
+        for (let i = 0; i < 7; i++) {
+          sum += digits[i] * (i % 2 === 0 ? 3 : 1);
+        }
+      }
+      const calculated = (10 - (sum % 10)) % 10;
+      return calculated === checkDigit;
+    }
+
+    // プレビュー上にバーコードの読み取り領域と認識ラインを描画（UX・操作性の劇的向上）
+    Quagga.onProcessed(function(result) {
+      const drawingCtx = Quagga.canvas.ctx.overlay;
+      const drawingCanvas = Quagga.canvas.dom.overlay;
+      
+      if (result) {
+        if (result.boxes) {
+          drawingCtx.clearRect(0, 0, parseInt(drawingCanvas.getAttribute("width")), parseInt(drawingCanvas.getAttribute("height")));
+          result.boxes.filter(function (box) {
+            return box !== result.box;
+          }).forEach(function (box) {
+            Quagga.ImageDebug.drawPath(box, {x: 0, y: 1}, drawingCtx, {color: "green", lineWidth: 2});
+          });
+        }
+        
+        if (result.box) {
+          Quagga.ImageDebug.drawPath(result.box, {x: 0, y: 1}, drawingCtx, {color: "#0ea5e9", lineWidth: 2});
+        }
+        
+        if (result.codeResult && result.codeResult.code) {
+          Quagga.ImageDebug.drawPath(result.line, {x: 'x', y: 'y'}, drawingCtx, {color: "#10b981", lineWidth: 3});
+        }
+      }
+    });
 
     window.onload = startScan;
   </script>
