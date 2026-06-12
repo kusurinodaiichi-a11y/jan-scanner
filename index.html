@@ -40,7 +40,7 @@
     
     h1 {
       font-size: 16px;
-      margin: 4px 0 12px 0;
+      margin: 4px 0 10px 0;
       color: var(--primary);
       text-align: center;
       font-weight: 800;
@@ -82,12 +82,74 @@
     }
     
     #status {
-      margin: 8px 0;
+      margin: 6px 0;
       font-size: 12.5px;
       font-weight: bold;
       color: #94a3b8;
       text-align: center;
       min-height: 18px;
+    }
+    
+    /* 🔎 ズームコントロールパネル */
+    #zoom-container {
+      background: var(--card-dark);
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 8px 12px;
+      margin-bottom: 10px;
+      display: none;
+      flex-direction: column;
+      gap: 8px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    }
+    
+    .zoom-slider-row {
+      display: flex;
+      align-items: center;
+      width: 100%;
+      gap: 12px;
+    }
+    
+    .zoom-label {
+      font-size: 11px;
+      font-weight: bold;
+      color: #94a3b8;
+      white-space: nowrap;
+    }
+    
+    .zoom-slider {
+      flex: 1;
+      accent-color: var(--primary);
+      height: 6px;
+      border-radius: 3px;
+      outline: none;
+      background: #475569;
+    }
+    
+    .zoom-btn-row {
+      display: flex;
+      gap: 6px;
+      justify-content: center;
+      width: 100%;
+    }
+    
+    .zoom-btn {
+      background: #334155;
+      color: var(--text-light);
+      border: 1px solid #475569;
+      padding: 4px 12px;
+      font-size: 11px;
+      font-weight: bold;
+      border-radius: 4px;
+      cursor: pointer;
+      transition: 0.1s;
+    }
+    .zoom-btn:hover {
+      background: #475569;
+    }
+    .zoom-btn.active {
+      background: var(--primary);
+      border-color: var(--primary);
     }
     
     /* スキャンされたリストエリア */
@@ -112,7 +174,7 @@
       display: flex;
       flex-direction: column;
       gap: 6px;
-      min-height: 120px;
+      min-height: 100px;
     }
     
     .scan-item {
@@ -209,6 +271,20 @@
     
     <div id="status">カメラを起動しています...</div>
     
+    <!-- 🔍 ズーム操作用パネル -->
+    <div id="zoom-container">
+      <div class="zoom-slider-row">
+        <span class="zoom-label">🔎 ズーム: <span id="zoom-val-label">1.0</span>x</span>
+        <input type="range" id="zoom-slider" class="zoom-slider" step="0.1" value="1">
+      </div>
+      <div class="zoom-btn-row">
+        <button class="zoom-btn active" id="z-btn-1" onclick="setZoomPreset(1.0)">1.0x</button>
+        <button class="zoom-btn" id="z-btn-15" onclick="setZoomPreset(1.5)">1.5x</button>
+        <button class="zoom-btn" id="z-btn-2" onclick="setZoomPreset(2.0)">2.0x</button>
+        <button class="zoom-btn" id="z-btn-25" onclick="setZoomPreset(2.5)">2.5x</button>
+      </div>
+    </div>
+    
     <div class="list-title">
       <span>📋 スキャンしたJAN一覧 (<span id="scan-count">0</span>件)</span>
       <button onclick="clearHistory()" style="background:none; border:none; color:#94a3b8; font-size:11px; cursor:pointer; text-decoration:underline;">すべてクリア</button>
@@ -232,6 +308,8 @@
     let lastScannedJan = "";
     let lastScanTime = 0;
     const DEBOUNCE_TIME = 2000; // 同一JANコードの連続読み取りを防ぐロック時間 (2秒)
+    
+    let activeTrack = null; // ズーム制御用
 
     const playBeep = (type = 'success') => {
       try {
@@ -338,6 +416,64 @@
       }
     }
 
+    // 🔍 ズーム制御関連JS
+    function setupZoomSupport(scannerInstance) {
+      try {
+        if (typeof scannerInstance.getActiveTrack !== 'function') return;
+        activeTrack = scannerInstance.getActiveTrack();
+        if (!activeTrack) return;
+        
+        const capabilities = activeTrack.getCapabilities();
+        if (capabilities.zoom) {
+          document.getElementById('zoom-container').style.display = 'flex';
+          
+          const minZoom = capabilities.zoom.min || 1;
+          const maxZoom = capabilities.zoom.max || 3;
+          const step = capabilities.zoom.step || 0.1;
+          
+          const slider = document.getElementById('zoom-slider');
+          slider.min = minZoom;
+          slider.max = maxZoom;
+          slider.step = step;
+          slider.value = minZoom;
+          
+          slider.oninput = (e) => {
+            const val = parseFloat(e.target.value);
+            applyZoom(val);
+          };
+        }
+      } catch(e) {
+        console.warn("ズーム機能セットアップ失敗: ", e);
+      }
+    }
+
+    function applyZoom(value) {
+      if (!activeTrack) return;
+      document.getElementById('zoom-val-label').innerText = value.toFixed(1);
+      
+      // クイックボタンのactiveクラス切り替え
+      document.querySelectorAll('.zoom-btn').forEach(btn => btn.classList.remove('active'));
+      if (value === 1.0) document.getElementById('z-btn-1').classList.add('active');
+      else if (value === 1.5) document.getElementById('z-btn-15').classList.add('active');
+      else if (value === 2.0) document.getElementById('z-btn-2').classList.add('active');
+      else if (value === 2.5) document.getElementById('z-btn-25').classList.add('active');
+
+      activeTrack.applyConstraints({
+        advanced: [{ zoom: value }]
+      }).catch(err => console.error("ズーム適用失敗: ", err));
+    }
+
+    function setZoomPreset(value) {
+      const slider = document.getElementById('zoom-slider');
+      if (slider) {
+        const min = parseFloat(slider.min) || 1;
+        const max = parseFloat(slider.max) || 3;
+        const targetValue = Math.max(min, Math.min(max, value));
+        slider.value = targetValue;
+        applyZoom(targetValue);
+      }
+    }
+
     function startScan() {
       html5Qrcode = new Html5Qrcode("reader");
       const config = {
@@ -350,7 +486,13 @@
         formatsToSupport: [
           Html5QrcodeSupportedFormats.EAN_13,
           Html5QrcodeSupportedFormats.EAN_8
-        ]
+        ],
+        // 💡【高解像度 ＆ オートフォーカス要求】細密なバーコードのぼやけ・つぶれを防止
+        videoConstraints: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          focusMode: "continuous"
+        }
       };
 
       Html5Qrcode.getCameras().then(devices => {
@@ -375,10 +517,12 @@
             addJan(decodedText);
           },
           (error) => {
-            // エラー抑制
+            // エラー無視
           }
         ).then(() => {
           document.getElementById('status').innerText = "バーコードを枠に合わせてください。";
+          // ズーム機能のセットアップ
+          setupZoomSupport(html5Qrcode);
         }).catch(err => {
           document.getElementById('status').innerText = "カメラ起動エラー: " + err;
         });
