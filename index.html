@@ -207,6 +207,7 @@
       cursor: pointer;
       padding: 0 4px;
       line-height: 1;
+      margin-left: 8px;
     }
     
     /* アクションボタンエリア */
@@ -476,6 +477,7 @@
 
     function startScan() {
       html5Qrcode = new Html5Qrcode("reader");
+      
       const config = {
         fps: 12,
         qrbox: (width, height) => {
@@ -486,17 +488,11 @@
         formatsToSupport: [
           Html5QrcodeSupportedFormats.EAN_13,
           Html5QrcodeSupportedFormats.EAN_8
-        ],
-        // 💡【高解像度 ＆ オートフォーカス要求】細密なバーコードのぼやけ・つぶれを防止
-        videoConstraints: {
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          focusMode: "continuous"
-        }
+        ]
       };
 
       // 1. まずは標準の facingMode: "environment" (背面カメラ) での起動を最優先する
-      // これにより iOS Safari でも確実に外カメラが選択されます
+      // iOS Safari で解像度競合によるフロントカメラ起動を防ぐため、videoConstraintsは空にします
       html5Qrcode.start(
         { facingMode: "environment" },
         config,
@@ -521,13 +517,21 @@
           }
 
           let cameraId = devices[0].id;
-          // ラベル情報がある場合は背面カメラを探す
+          let hasBackLabel = false;
+
+          // ① ラベル情報がある場合は背面カメラを探す
           for (let i = 0; i < devices.length; i++) {
             const label = (devices[i].label || "").toLowerCase();
             if (label.indexOf("back") !== -1 || label.indexOf("rear") !== -1 || label.indexOf("背面") !== -1) {
               cameraId = devices[i].id;
+              hasBackLabel = true;
               break;
             }
+          }
+
+          // ② iOS等でラベルが空かつ複数カメラがある場合、配列の最後のカメラを選択
+          if (!hasBackLabel && devices.length > 1) {
+            cameraId = devices[devices.length - 1].id;
           }
 
           html5Qrcode.start(
