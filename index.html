@@ -495,39 +495,59 @@
         }
       };
 
-      Html5Qrcode.getCameras().then(devices => {
-        if (!devices || devices.length === 0) {
-          document.getElementById('status').innerText = "カメラが見つかりませんでした。";
-          return;
+      // 1. まずは標準の facingMode: "environment" (背面カメラ) での起動を最優先する
+      // これにより iOS Safari でも確実に外カメラが選択されます
+      html5Qrcode.start(
+        { facingMode: "environment" },
+        config,
+        (decodedText) => {
+          addJan(decodedText);
+        },
+        (error) => {
+          // エラー無視
         }
-
-        let cameraId = devices[0].id;
-        for (let i = 0; i < devices.length; i++) {
-          const label = devices[i].label.toLowerCase();
-          if (label.indexOf("back") !== -1 || label.indexOf("rear") !== -1 || label.indexOf("背面") !== -1) {
-            cameraId = devices[i].id;
-            break;
-          }
-        }
-
-        html5Qrcode.start(
-          cameraId,
-          config,
-          (decodedText) => {
-            addJan(decodedText);
-          },
-          (error) => {
-            // エラー無視
-          }
-        ).then(() => {
-          document.getElementById('status').innerText = "バーコードを枠に合わせてください。";
-          // ズーム機能のセットアップ
-          setupZoomSupport(html5Qrcode);
-        }).catch(err => {
-          document.getElementById('status').innerText = "カメラ起動エラー: " + err;
-        });
+      ).then(() => {
+        document.getElementById('status').innerText = "バーコードを枠に合わせてください。";
+        // ズーム機能のセットアップ
+        setupZoomSupport(html5Qrcode);
       }).catch(err => {
-        document.getElementById('status').innerText = "カメラ取得エラー: " + err;
+        console.warn("facingModeでの起動失敗。カメラID探索に切り替えます...", err);
+        
+        // 2. facingModeが失敗した場合のみ、カメラデバイス一覧を取得して起動を試みる (フォールバック)
+        Html5Qrcode.getCameras().then(devices => {
+          if (!devices || devices.length === 0) {
+            document.getElementById('status').innerText = "カメラが見つかりませんでした。";
+            return;
+          }
+
+          let cameraId = devices[0].id;
+          // ラベル情報がある場合は背面カメラを探す
+          for (let i = 0; i < devices.length; i++) {
+            const label = (devices[i].label || "").toLowerCase();
+            if (label.indexOf("back") !== -1 || label.indexOf("rear") !== -1 || label.indexOf("背面") !== -1) {
+              cameraId = devices[i].id;
+              break;
+            }
+          }
+
+          html5Qrcode.start(
+            cameraId,
+            config,
+            (decodedText) => {
+              addJan(decodedText);
+            },
+            (error) => {
+              // エラー無視
+            }
+          ).then(() => {
+            document.getElementById('status').innerText = "バーコードを枠に合わせてください。";
+            setupZoomSupport(html5Qrcode);
+          }).catch(err2 => {
+            document.getElementById('status').innerText = "カメラ起動エラー: " + err2;
+          });
+        }).catch(err => {
+          document.getElementById('status').innerText = "カメラ取得エラー: " + err;
+        });
       });
     }
 
