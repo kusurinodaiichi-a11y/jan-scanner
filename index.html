@@ -347,50 +347,78 @@
 
   <script>
     let scannedJans = [];
+    let isScanLocked = false;
+    const SCAN_LOCK_DURATION = 1500; // スキャン成功後のグローバルロック時間 (1.5秒)
     let lastScannedJan = "";
-    let lastScanTime = 0;
-    const DEBOUNCE_TIME = 2000; // 同一JANコードの連続読み取りを防ぐロック時間 (2秒)
     
     let activeTrack = null; // ズーム制御用
     let cameraDevices = []; // 利用可能なカメラ一覧
     let currentCameraIndex = 0; // 現在のカメラインデックス
     let isQuaggaRunning = false;
 
+    // iOS SafariでのWeb Audio自動再生制限を解除するためのグローバルContext
+    let globalAudioCtx = null;
+    const initAudio = () => {
+      if (globalAudioCtx) return;
+      try {
+        globalAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        const buffer = globalAudioCtx.createBuffer(1, 1, 22050);
+        const source = globalAudioCtx.createBufferSource();
+        source.buffer = buffer;
+        source.connect(globalAudioCtx.destination);
+        source.start(0);
+        if (globalAudioCtx.state === 'suspended') {
+          globalAudioCtx.resume();
+        }
+      } catch (e) {
+        console.warn("AudioContext初期化エラー: ", e);
+      }
+    };
+    window.addEventListener('touchstart', initAudio, { once: true });
+    window.addEventListener('click', initAudio, { once: true });
+
     const playBeep = (type = 'success') => {
       try {
-        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const oscillator = audioCtx.createOscillator();
-        const gainNode = audioCtx.createGain();
+        if (!globalAudioCtx) {
+          globalAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        if (globalAudioCtx.state === 'suspended') {
+          globalAudioCtx.resume();
+        }
+        
+        const oscillator = globalAudioCtx.createOscillator();
+        const gainNode = globalAudioCtx.createGain();
         oscillator.connect(gainNode);
-        gainNode.connect(audioCtx.destination);
+        gainNode.connect(globalAudioCtx.destination);
         
         if (type === 'success') {
           oscillator.type = 'sine';
           oscillator.frequency.value = 1000;
-          gainNode.gain.setValueAtTime(0.08, audioCtx.currentTime);
+          gainNode.gain.setValueAtTime(0.08, globalAudioCtx.currentTime);
           oscillator.start();
-          oscillator.stop(audioCtx.currentTime + 0.12);
+          oscillator.stop(globalAudioCtx.currentTime + 0.12);
         } else {
           oscillator.type = 'triangle';
           oscillator.frequency.value = 300;
-          gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+          gainNode.gain.setValueAtTime(0.1, globalAudioCtx.currentTime);
           oscillator.start();
-          oscillator.stop(audioCtx.currentTime + 0.2);
+          oscillator.stop(globalAudioCtx.currentTime + 0.2);
         }
       } catch (e) {
-        console.error(e);
+        console.error("ビープ音再生エラー: ", e);
       }
     };
 
     function addJan(jan) {
-      const now = Date.now();
+      if (isScanLocked) return;
       
-      if (jan === lastScannedJan && (now - lastScanTime) < DEBOUNCE_TIME) {
-        return;
-      }
+      // スキャン成功、あるいは重複警告のどちらであっても、チャタリング防止のため即座に1.5秒ロックをかける
+      isScanLocked = true;
+      setTimeout(() => {
+        isScanLocked = false;
+      }, SCAN_LOCK_DURATION);
       
       lastScannedJan = jan;
-      lastScanTime = now;
       
       if (scannedJans.includes(jan)) {
         playBeep('duplicate');
@@ -560,11 +588,11 @@
           type: "LiveStream",
           target: document.querySelector('#reader'),
           constraints: constraints,
-          area: { // スキャン検出の感度を中央部に絞り込んでノイズ・誤読を低減
-            top: "10%",
-            right: "10%",
-            left: "10%",
-            bottom: "10%"
+          area: { // スキャンエリアを画面中央の細いスリット（高さ30%）に制限し、端の書類などの映り込みを完全遮断
+            top: "35%",
+            bottom: "35%",
+            left: "5%",
+            right: "5%"
           }
         },
         decoder: {
@@ -612,14 +640,33 @@
       });
     }
 
+    let lastDetectedTemp = "";
+    let detectedCount = 0;
+    const REQUIRED_DETECTIONS = 4; // 誤読防止のため、連続して4回同じコードが検出されたら確定する (本物なら一瞬でクリアされます)
+
     // バーコードを検出した際のコールバック
     Quagga.onDetected(function(result) {
+      if (isScanLocked) return;
+
       if (result && result.codeResult && result.codeResult.code) {
         const code = result.codeResult.code;
-        // Quaggaの唯一の弱点である「かすれやノイズによる誤読」を防ぐため、
-        // EAN-13 / EAN-8 のチェックサムを計算して正しいJANコードのみを受理する
+        // 海外製JANコードにも対応するため先頭数字の制限は行わず、
+        // EAN-13 / EAN-8 のチェックサム（モジュラス10）検証に合格したもののみを受理します。
+        // （書類の文字やノイズは「連続4回一致」の検証によって完璧に除外されます）
         if (isValidEAN(code)) {
-          addJan(code);
+          if (code === lastDetectedTemp) {
+            detectedCount++;
+          } else {
+            lastDetectedTemp = code;
+            detectedCount = 1;
+          }
+
+          if (detectedCount >= REQUIRED_DETECTIONS) {
+            addJan(code);
+            // 確定したらテンポラリをリセットして連打を防ぐ
+            lastDetectedTemp = "";
+            detectedCount = 0;
+          }
         }
       }
     });
