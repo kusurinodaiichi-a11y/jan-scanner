@@ -465,7 +465,11 @@
           slider.min = minZoom;
           slider.max = maxZoom;
           slider.step = step;
-          slider.value = minZoom;
+          
+          // iOS Safariや高性能カメラでのピント調節対策として、初期ズームを1.5倍（またはサポート範囲内の値）に設定
+          const defaultZoom = Math.min(Math.max(minZoom, 1.5), maxZoom);
+          slider.value = defaultZoom;
+          applyZoom(defaultZoom);
           
           slider.oninput = (e) => {
             const val = parseFloat(e.target.value);
@@ -516,16 +520,19 @@
         html5Qrcode.stop().then(() => {
           const nextId = cameraDevices[currentCameraIndex].id;
           const config = {
-            fps: 12,
+            fps: 15,
             qrbox: (width, height) => {
-              const w = Math.min(width * 0.75, 290);
-              const h = Math.min(height * 0.45, 140);
+              const w = Math.min(width * 0.85, 360);
+              const h = Math.min(height * 0.35, 120);
               return { width: w, height: h };
             },
             formatsToSupport: [
               Html5QrcodeSupportedFormats.EAN_13,
               Html5QrcodeSupportedFormats.EAN_8
-            ]
+            ],
+            experimentalFeatures: {
+              useBarCodeDetectorIfSupported: false
+            }
           };
           
           html5Qrcode.start(
@@ -549,16 +556,19 @@
       html5Qrcode = new Html5Qrcode("reader");
       
       const config = {
-        fps: 12,
+        fps: 15,
         qrbox: (width, height) => {
-          const w = Math.min(width * 0.75, 290);
-          const h = Math.min(height * 0.45, 140);
+          const w = Math.min(width * 0.85, 360);
+          const h = Math.min(height * 0.35, 120);
           return { width: w, height: h };
         },
         formatsToSupport: [
           Html5QrcodeSupportedFormats.EAN_13,
           Html5QrcodeSupportedFormats.EAN_8
-        ]
+        ],
+        experimentalFeatures: {
+          useBarCodeDetectorIfSupported: false
+        }
       };
 
       // 1. デバイス一覧を取得して、初期起動カメラを決定する
@@ -576,6 +586,7 @@
         }
 
         // iPhoneのSafari初期インカメラ起動を防ぐため、デフォルトは「配列の最後（通常は背面）」を選択
+        // iOS Safariではラベルが空文字になるため、明示的に最後のカメラIDを指定
         currentCameraIndex = cameraDevices.length - 1;
         let cameraId = cameraDevices[currentCameraIndex].id;
 
