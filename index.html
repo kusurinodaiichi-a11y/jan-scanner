@@ -331,6 +331,16 @@
   </div>
 
   <script>
+    // iOS 17以降のSafariでBarcodeDetectorのバグによりJANコードが読めなくなる問題を完全に防ぐため、
+    // ライブラリの初期化前に BarcodeDetector API を隠蔽してZXing（JS版）に強制フォールバックさせます。
+    if (typeof window !== 'undefined' && 'BarcodeDetector' in window) {
+      try {
+        delete window.BarcodeDetector;
+      } catch (e) {
+        window.BarcodeDetector = undefined;
+      }
+    }
+
     let scannedJans = [];
     let html5Qrcode = null;
     let lastScannedJan = "";
@@ -365,6 +375,10 @@
       } catch (e) {
         console.error(e);
       }
+    };
+
+    fontColor = (color) => {
+      document.getElementById('status').style.color = color;
     };
 
     function addJan(jan) {
@@ -466,8 +480,8 @@
           slider.max = maxZoom;
           slider.step = step;
           
-          // iOS Safariや高性能カメラでのピント調節対策として、初期ズームを1.5倍（またはサポート範囲内の値）に設定
-          const defaultZoom = Math.min(Math.max(minZoom, 1.5), maxZoom);
+          // iOS Safariや高性能カメラでのピント調節対策として、初期ズームを2.0倍（またはサポート範囲内の値）に設定
+          const defaultZoom = Math.min(Math.max(minZoom, 2.0), maxZoom);
           slider.value = defaultZoom;
           applyZoom(defaultZoom);
           
@@ -521,15 +535,15 @@
           const nextId = cameraDevices[currentCameraIndex].id;
           const config = {
             fps: 15,
-            qrbox: (width, height) => {
-              const w = Math.min(width * 0.85, 360);
-              const h = Math.min(height * 0.35, 120);
-              return { width: w, height: h };
-            },
             formatsToSupport: [
               Html5QrcodeSupportedFormats.EAN_13,
               Html5QrcodeSupportedFormats.EAN_8
             ],
+            videoConstraints: {
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+              facingMode: "environment"
+            },
             experimentalFeatures: {
               useBarCodeDetectorIfSupported: false
             }
@@ -557,15 +571,15 @@
       
       const config = {
         fps: 15,
-        qrbox: (width, height) => {
-          const w = Math.min(width * 0.85, 360);
-          const h = Math.min(height * 0.35, 120);
-          return { width: w, height: h };
-        },
         formatsToSupport: [
           Html5QrcodeSupportedFormats.EAN_13,
           Html5QrcodeSupportedFormats.EAN_8
         ],
+        videoConstraints: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          facingMode: "environment"
+        },
         experimentalFeatures: {
           useBarCodeDetectorIfSupported: false
         }
