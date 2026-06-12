@@ -38,13 +38,37 @@
       height: 100vh;
     }
     
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+      margin: 4px 0 10px 0;
+    }
+    
     h1 {
       font-size: 16px;
-      margin: 4px 0 10px 0;
+      margin: 0;
       color: var(--primary);
-      text-align: center;
       font-weight: 800;
       letter-spacing: 0.05em;
+    }
+    
+    #btn-switch-camera {
+      background: var(--primary);
+      color: var(--text-light);
+      border: none;
+      padding: 6px 12px;
+      font-size: 11.5px;
+      font-weight: bold;
+      border-radius: 6px;
+      cursor: pointer;
+      display: none; /* カメラが複数ある時だけ表示 */
+      transition: background 0.1s;
+      box-shadow: 0 2px 4px rgba(14, 165, 233, 0.3);
+    }
+    #btn-switch-camera:hover {
+      background: var(--primary-hover);
     }
     
     #scanner-container {
@@ -263,7 +287,10 @@
 </head>
 <body>
   <div class="container">
-    <h1>📷 連続JANコードスキャナー</h1>
+    <div class="header-row">
+      <h1>📷 連続JANコードスキャナー</h1>
+      <button id="btn-switch-camera" onclick="switchCamera()">🔄 カメラ切替</button>
+    </div>
     
     <div id="scanner-container">
       <div id="reader"></div>
@@ -311,6 +338,8 @@
     const DEBOUNCE_TIME = 2000; // 同一JANコードの連続読み取りを防ぐロック時間 (2秒)
     
     let activeTrack = null; // ズーム制御用
+    let cameraDevices = []; // 利用可能なカメラ一覧
+    let currentCameraIndex = 0; // 現在のカメラインデックス
 
     const playBeep = (type = 'success') => {
       try {
@@ -442,6 +471,8 @@
             const val = parseFloat(e.target.value);
             applyZoom(val);
           };
+        } else {
+          document.getElementById('zoom-container').style.display = 'none';
         }
       } catch(e) {
         console.warn("ズーム機能セットアップ失敗: ", e);
@@ -452,7 +483,6 @@
       if (!activeTrack) return;
       document.getElementById('zoom-val-label').innerText = value.toFixed(1);
       
-      // クイックボタンのactiveクラス切り替え
       document.querySelectorAll('.zoom-btn').forEach(btn => btn.classList.remove('active'));
       if (value === 1.0) document.getElementById('z-btn-1').classList.add('active');
       else if (value === 1.5) document.getElementById('z-btn-15').classList.add('active');
@@ -475,6 +505,46 @@
       }
     }
 
+    // 🔄 カメラ切り替えロジック
+    function switchCamera() {
+      if (cameraDevices.length <= 1) return;
+      
+      currentCameraIndex = (currentCameraIndex + 1) % cameraDevices.length;
+      document.getElementById('status').innerText = "カメラを切り替えています...";
+      
+      if (html5Qrcode) {
+        html5Qrcode.stop().then(() => {
+          const nextId = cameraDevices[currentCameraIndex].id;
+          const config = {
+            fps: 12,
+            qrbox: (width, height) => {
+              const w = Math.min(width * 0.75, 290);
+              const h = Math.min(height * 0.45, 140);
+              return { width: w, height: h };
+            },
+            formatsToSupport: [
+              Html5QrcodeSupportedFormats.EAN_13,
+              Html5QrcodeSupportedFormats.EAN_8
+            ]
+          };
+          
+          html5Qrcode.start(
+            nextId,
+            config,
+            (decodedText) => addJan(decodedText),
+            (error) => {}
+          ).then(() => {
+            document.getElementById('status').innerText = "カメラを切り替えました。枠に合わせてください。";
+            setupZoomSupport(html5Qrcode);
+          }).catch(err => {
+            document.getElementById('status').innerText = "カメラ起動エラー: " + err;
+          });
+        }).catch(err => {
+          console.error("カメラ停止エラー: ", err);
+        });
+      }
+    }
+
     function startScan() {
       html5Qrcode = new Html5Qrcode("reader");
       
@@ -491,67 +561,63 @@
         ]
       };
 
-      // 1. まずは標準の facingMode: "environment" (背面カメラ) での起動を最優先する
-      // iOS Safari で解像度競合によるフロントカメラ起動を防ぐため、videoConstraintsは空にします
-      html5Qrcode.start(
-        { facingMode: "environment" },
-        config,
-        (decodedText) => {
-          addJan(decodedText);
-        },
-        (error) => {
-          // エラー無視
-        }
-      ).then(() => {
-        document.getElementById('status').innerText = "バーコードを枠に合わせてください。";
-        // ズーム機能のセットアップ
-        setupZoomSupport(html5Qrcode);
-      }).catch(err => {
-        console.warn("facingModeでの起動失敗。カメラID探索に切り替えます...", err);
+      // 1. デバイス一覧を取得して、初期起動カメラを決定する
+      Html5Qrcode.getCameras().then(devices => {
+        cameraDevices = devices || [];
         
-        // 2. facingModeが失敗した場合のみ、カメラデバイス一覧を取得して起動を試みる (フォールバック)
-        Html5Qrcode.getCameras().then(devices => {
-          if (!devices || devices.length === 0) {
-            document.getElementById('status').innerText = "カメラが見つかりませんでした。";
-            return;
+        if (cameraDevices.length === 0) {
+          document.getElementById('status').innerText = "カメラが見つかりませんでした。";
+          return;
+        }
+
+        // カメラが複数ある場合は切替ボタンを表示
+        if (cameraDevices.length > 1) {
+          document.getElementById('btn-switch-camera').style.display = 'block';
+        }
+
+        // iPhoneのSafari初期インカメラ起動を防ぐため、デフォルトは「配列の最後（通常は背面）」を選択
+        currentCameraIndex = cameraDevices.length - 1;
+        let cameraId = cameraDevices[currentCameraIndex].id;
+
+        // もしラベルが取得できていて、背面の文字があればそれを優先して初期値にする
+        for (let i = 0; i < cameraDevices.length; i++) {
+          const label = (cameraDevices[i].label || "").toLowerCase();
+          if (label.indexOf("back") !== -1 || label.indexOf("rear") !== -1 || label.indexOf("背面") !== -1) {
+            currentCameraIndex = i;
+            cameraId = cameraDevices[i].id;
+            break;
           }
+        }
 
-          let cameraId = devices[0].id;
-          let hasBackLabel = false;
-
-          // ① ラベル情報がある場合は背面カメラを探す
-          for (let i = 0; i < devices.length; i++) {
-            const label = (devices[i].label || "").toLowerCase();
-            if (label.indexOf("back") !== -1 || label.indexOf("rear") !== -1 || label.indexOf("背面") !== -1) {
-              cameraId = devices[i].id;
-              hasBackLabel = true;
-              break;
-            }
+        html5Qrcode.start(
+          cameraId,
+          config,
+          (decodedText) => {
+            addJan(decodedText);
+          },
+          (error) => {
+            // エラー無視
           }
-
-          // ② iOS等でラベルが空かつ複数カメラがある場合、配列の最後のカメラを選択
-          if (!hasBackLabel && devices.length > 1) {
-            cameraId = devices[devices.length - 1].id;
-          }
-
+        ).then(() => {
+          document.getElementById('status').innerText = "バーコードを枠に合わせてください。";
+          setupZoomSupport(html5Qrcode);
+        }).catch(err => {
+          console.warn("指定IDでの起動失敗。標準環境起動を試みます...", err);
+          // 万が一失敗した場合は、標準の facingMode 起動でフォールバック
           html5Qrcode.start(
-            cameraId,
+            { facingMode: "environment" },
             config,
-            (decodedText) => {
-              addJan(decodedText);
-            },
-            (error) => {
-              // エラー無視
-            }
+            (decodedText) => addJan(decodedText),
+            (error) => {}
           ).then(() => {
             document.getElementById('status').innerText = "バーコードを枠に合わせてください。";
             setupZoomSupport(html5Qrcode);
           }).catch(err2 => {
             document.getElementById('status').innerText = "カメラ起動エラー: " + err2;
           });
-        }).catch(err => {
-          document.getElementById('status').innerText = "カメラ取得エラー: " + err;
         });
+      }).catch(err => {
+        document.getElementById('status').innerText = "カメラ取得エラー: " + err;
       });
     }
 
